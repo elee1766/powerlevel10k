@@ -4075,7 +4075,7 @@ function _p9k_jj_query() {
   [[ -n $_p9k__jj_dir ]] || return 1
 
   local jj_output
-  # Template fields separated by \x00:
+  # Template fields separated by \x00 (null byte):
   #  1: change_id (shortest, 8 chars)
   #  2: commit_id (shortest, 8 chars)
   #  3: bookmarks (space-separated)
@@ -4086,6 +4086,7 @@ function _p9k_jj_query() {
   #  8: immutable (1/0)
   #  9: description first line
   # 10: root (1/0)
+  # Note: uses concat (++) instead of separate() to preserve empty fields.
   jj_output=$(
     command jj log \
       --no-graph \
@@ -4093,24 +4094,24 @@ function _p9k_jj_query() {
       --no-pager \
       -r @ \
       --limit 1 \
-      -T 'separate("\x00",
-            change_id.shortest(8),
-            commit_id.shortest(8),
-            bookmarks.join(" "),
-            if(conflict, "1", "0"),
-            if(empty, "1", "0"),
-            if(divergent, "1", "0"),
-            if(hidden, "1", "0"),
-            if(immutable, "1", "0"),
-            if(description, description.first_line(), ""),
-            if(root, "1", "0"))' \
+      -T 'change_id.shortest(8) ++ "\x00" ++
+          commit_id.shortest(8) ++ "\x00" ++
+          bookmarks.join(" ") ++ "\x00" ++
+          if(conflict, "1", "0") ++ "\x00" ++
+          if(empty, "1", "0") ++ "\x00" ++
+          if(divergent, "1", "0") ++ "\x00" ++
+          if(hidden, "1", "0") ++ "\x00" ++
+          if(immutable, "1", "0") ++ "\x00" ++
+          if(description, description.first_line(), "") ++ "\x00" ++
+          if(root, "1", "0")' \
       2>/dev/null
   ) || return 1
 
   [[ -n $jj_output ]] || return 1
 
+  # Split on null bytes using the (@0) flag
   local -a fields
-  fields=("${(@s:\x00:)jj_output}")
+  fields=("${(@0)jj_output}")
 
   # Need at least 10 fields
   (( $#fields >= 10 )) || return 1
