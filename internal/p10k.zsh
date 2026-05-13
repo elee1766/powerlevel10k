@@ -4093,7 +4093,7 @@ function _p9k_jj_query() {
       --no-graph \
       --ignore-working-copy \
       --no-pager \
-      -r 'ancestors(@, 10)' \
+      -r "@ | (ancestors(@, ${_POWERLEVEL9K_VCS_JJ_ANCESTOR_BOOKMARK_DEPTH:-10}) ~ (::immutable_heads() ~ immutable_heads()))" \
       -T 'if(self.contained_in("@"),
             change_id.shortest(8) ++ "\x00" ++
             commit_id.shortest(8) ++ "\x00" ++
@@ -4162,6 +4162,12 @@ function _p9k_jj_query() {
     fi
     (( dist++ ))
   done
+  # Apply display limit (default 3, matching jj-starship)
+  local -i bm_limit=${_POWERLEVEL9K_VCS_JJ_BOOKMARKS_DISPLAY_LIMIT:-3}
+  if (( bm_limit > 0 && $#bookmark_entries > bm_limit )); then
+    local -i hidden=$(( $#bookmark_entries - bm_limit ))
+    bookmark_entries=("${(@)bookmark_entries[1,bm_limit]}" "…+${hidden}")
+  fi
   typeset -g JJ_STATUS_BOOKMARKS_DISPLAY=${(j:, :)bookmark_entries}
 
   # Map to VCS_STATUS_* for compatibility with _p9k_vcs_render() and my_git_formatter()
@@ -7980,6 +7986,8 @@ _p9k_init_params() {
   _p9k_declare -a POWERLEVEL9K_VCS_BACKENDS -- git jj
   (( $+commands[git] )) || _POWERLEVEL9K_VCS_BACKENDS=(${_POWERLEVEL9K_VCS_BACKENDS:#git})
   (( $+commands[jj] ))  || _POWERLEVEL9K_VCS_BACKENDS=(${_POWERLEVEL9K_VCS_BACKENDS:#jj})
+  _p9k_declare -i POWERLEVEL9K_VCS_JJ_BOOKMARKS_DISPLAY_LIMIT 3
+  _p9k_declare -i POWERLEVEL9K_VCS_JJ_ANCESTOR_BOOKMARK_DEPTH 10
   _p9k_declare -b POWERLEVEL9K_VCS_DISABLE_GITSTATUS_FORMATTING 0
   _p9k_declare -i POWERLEVEL9K_VCS_MAX_INDEX_SIZE_DIRTY -1
   _p9k_declare -i POWERLEVEL9K_VCS_STAGED_MAX_NUM 1
