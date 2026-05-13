@@ -4085,9 +4085,9 @@ function _p9k_jj_query() {
   # Line position = distance from @ (line 1 = distance 0, line 2 = distance 1, etc.)
   #
   # @ metadata fields (null-byte separated, on line 1 before the bookmarks):
-  #  1: change_id    2: commit_id    3: conflict(1/0)    4: empty(1/0)
+  #  1: change_id    2: commit_id    3: conflict(1/0)    4: empty_commit(1/0)
   #  5: divergent(1/0)   6: hidden(1/0)   7: immutable(1/0)
-  #  8: description first line   9: root(1/0)
+  #  8: empty_desc(1/0)  9: root(1/0)
   jj_output=$(
     command jj log \
       --no-graph \
@@ -4102,7 +4102,7 @@ function _p9k_jj_query() {
             if(divergent, "1", "0") ++ "\x00" ++
             if(hidden, "1", "0") ++ "\x00" ++
             if(immutable, "1", "0") ++ "\x00" ++
-            if(description, description.first_line(), "") ++ "\x00" ++
+            if(description, "0", "1") ++ "\x00" ++
             if(root, "1", "0") ++ "\x00",
             "") ++
           bookmarks.join(",") ++ "\n"' \
@@ -4131,7 +4131,7 @@ function _p9k_jj_query() {
   typeset -gi JJ_STATUS_DIVERGENT=${parts[5]}
   typeset -gi JJ_STATUS_HIDDEN=${parts[6]}
   typeset -gi JJ_STATUS_IMMUTABLE=${parts[7]}
-  typeset -g  JJ_STATUS_DESCRIPTION=${parts[8]}
+  typeset -gi JJ_STATUS_EMPTY_DESC=${parts[8]}
   typeset -g  JJ_STATUS_WORKDIR=$_p9k__jj_dir
 
   # Build bookmarks with distances (starship style: main, feat~2, develop~5)
@@ -4196,7 +4196,7 @@ function _p9k_jj_query() {
   VCS_STATUS_PUSH_COMMITS_BEHIND=0
   VCS_STATUS_NUM_SKIP_WORKTREE=0
   VCS_STATUS_NUM_ASSUME_UNCHANGED=0
-  VCS_STATUS_COMMIT_SUMMARY=${parts[8]}
+  VCS_STATUS_COMMIT_SUMMARY=
 
   _p9k__jj_active=1
   return 0
@@ -4222,7 +4222,7 @@ function _p9k_vcs_jj_render() {
 
   if ! _p9k_cache_ephemeral_get "$state" "$JJ_STATUS_CHANGE_ID" \
        "$JJ_STATUS_BOOKMARKS_DISPLAY" "$JJ_STATUS_CONFLICT" "$JJ_STATUS_EMPTY" \
-       "$JJ_STATUS_DIVERGENT" "$JJ_STATUS_DESCRIPTION"; then
+       "$JJ_STATUS_DIVERGENT" "$JJ_STATUS_EMPTY_DESC"; then
 
     local content
     local icon
@@ -4248,7 +4248,7 @@ function _p9k_vcs_jj_render() {
     (( JJ_STATUS_CONFLICT )) && status_str+='!'
     (( JJ_STATUS_DIVERGENT )) && status_str+=$'\u21d4'
     # Only show ∅ for non-empty commits with empty description
-    if [[ -z $JJ_STATUS_DESCRIPTION ]] && (( ! JJ_STATUS_EMPTY )); then
+    if (( JJ_STATUS_EMPTY_DESC && ! JJ_STATUS_EMPTY )); then
       status_str+=$'\u2205'
     fi
 
