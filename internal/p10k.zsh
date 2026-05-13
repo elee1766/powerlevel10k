@@ -4049,8 +4049,11 @@ function _p9k_vcs_render() {
 ################################################################
 # Jujutsu (jj) VCS support
 #
-# Detects jj repositories and populates VCS_STATUS_* variables
-# from jj state, then renders via the standard VCS segment.
+# Detects jj repositories and renders a starship-style VCS segment:
+#   {change_id} ({bookmarks_with_distance}) [{status}]
+#
+# Bookmarks include ancestor bookmarks with distance notation (e.g. main~3).
+# Status indicators: ! conflict, ⇔ divergent, ∅ empty description.
 
 # Walk up directory tree to find .jj directory.
 # Sets _p9k__jj_dir to the repo root or empty if not found.
@@ -4067,102 +4070,106 @@ function _p9k_jj_detect() {
   done
 }
 
-# Query jj for repository state and populate VCS_STATUS_* variables.
+# Query jj for repository state and populate JJ_STATUS_* variables.
+# Uses a single `jj log` call with ancestors(@, 10) to get both the
+# working copy info and ancestor bookmarks with distances in one shot.
 # Uses --ignore-working-copy for speed (avoids snapshot).
-# Returns 0 on success.
 function _p9k_jj_query() {
   typeset -gi _p9k__jj_active=0
   [[ -n $_p9k__jj_dir ]] || return 1
 
   local jj_output
-  # Template fields separated by \x00 (null byte):
-  #  1: change_id (shortest, 8 chars)
-  #  2: commit_id (shortest, 8 chars)
-  #  3: bookmarks (space-separated)
-  #  4: conflict (1/0)
-  #  5: empty (1/0)
-  #  6: divergent (1/0)
-  #  7: hidden (1/0)
-  #  8: immutable (1/0)
-  #  9: description first line
-  # 10: root (1/0)
-  # Note: uses concat (++) instead of separate() to preserve empty fields.
+  # Single query: ancestors(@, 10) in topological order.
+  # For the @ commit: emit null-separated metadata fields followed by bookmarks.
+  # For all commits (including @): emit bookmarks on each line.
+  # Line position = distance from @ (line 1 = distance 0, line 2 = distance 1, etc.)
+  #
+  # @ metadata fields (null-byte separated, on line 1 before the bookmarks):
+  #  1: change_id    2: commit_id    3: conflict(1/0)    4: empty(1/0)
+  #  5: divergent(1/0)   6: hidden(1/0)   7: immutable(1/0)
+  #  8: description first line   9: root(1/0)
   jj_output=$(
     command jj log \
       --no-graph \
       --ignore-working-copy \
       --no-pager \
-      -r @ \
-      --limit 1 \
-      -T 'change_id.shortest(8) ++ "\x00" ++
-          commit_id.shortest(8) ++ "\x00" ++
-          bookmarks.join(" ") ++ "\x00" ++
-          if(conflict, "1", "0") ++ "\x00" ++
-          if(empty, "1", "0") ++ "\x00" ++
-          if(divergent, "1", "0") ++ "\x00" ++
-          if(hidden, "1", "0") ++ "\x00" ++
-          if(immutable, "1", "0") ++ "\x00" ++
-          if(description, description.first_line(), "") ++ "\x00" ++
-          if(root, "1", "0")' \
+      -r 'ancestors(@, 10)' \
+      -T 'if(self.contained_in("@"),
+            change_id.shortest(8) ++ "\x00" ++
+            commit_id.shortest(8) ++ "\x00" ++
+            if(conflict, "1", "0") ++ "\x00" ++
+            if(empty, "1", "0") ++ "\x00" ++
+            if(divergent, "1", "0") ++ "\x00" ++
+            if(hidden, "1", "0") ++ "\x00" ++
+            if(immutable, "1", "0") ++ "\x00" ++
+            if(description, description.first_line(), "") ++ "\x00" ++
+            if(root, "1", "0") ++ "\x00",
+            "") ++
+          bookmarks.join(",") ++ "\n"' \
       2>/dev/null
   ) || return 1
 
   [[ -n $jj_output ]] || return 1
 
-  # Split on null bytes using the (@0) flag
-  local -a fields
-  fields=("${(@0)jj_output}")
+  # Split into lines. Line 1 has @ info + @ bookmarks; lines 2+ have ancestor bookmarks.
+  local -a lines=("${(@f)jj_output}")
+  [[ -n ${lines[1]} ]] || return 1
 
-  # Need at least 10 fields
-  (( $#fields >= 10 )) || return 1
+  # Parse line 1: null-separated metadata fields followed by @'s bookmarks
+  local -a parts=("${(@0)lines[1]}")
+  # Need at least 9 metadata fields + bookmarks field
+  (( $#parts >= 10 )) || return 1
 
   # Don't show anything for the root commit
-  [[ ${fields[10]} == 1 ]] && return 1
+  [[ ${parts[9]} == 1 ]] && return 1
 
   # Populate JJ-specific state variables
-  typeset -g JJ_STATUS_CHANGE_ID=${fields[1]}
-  typeset -g JJ_STATUS_COMMIT_ID=${fields[2]}
-  typeset -g JJ_STATUS_BOOKMARKS=${fields[3]}
-  typeset -gi JJ_STATUS_CONFLICT=${fields[4]}
-  typeset -gi JJ_STATUS_EMPTY=${fields[5]}
-  typeset -gi JJ_STATUS_DIVERGENT=${fields[6]}
-  typeset -gi JJ_STATUS_HIDDEN=${fields[7]}
-  typeset -gi JJ_STATUS_IMMUTABLE=${fields[8]}
-  typeset -g JJ_STATUS_DESCRIPTION=${fields[9]}
-  typeset -g JJ_STATUS_WORKDIR=$_p9k__jj_dir
+  typeset -g  JJ_STATUS_CHANGE_ID=${parts[1]}
+  typeset -g  JJ_STATUS_COMMIT_ID=${parts[2]}
+  typeset -gi JJ_STATUS_CONFLICT=${parts[3]}
+  typeset -gi JJ_STATUS_EMPTY=${parts[4]}
+  typeset -gi JJ_STATUS_DIVERGENT=${parts[5]}
+  typeset -gi JJ_STATUS_HIDDEN=${parts[6]}
+  typeset -gi JJ_STATUS_IMMUTABLE=${parts[7]}
+  typeset -g  JJ_STATUS_DESCRIPTION=${parts[8]}
+  typeset -g  JJ_STATUS_WORKDIR=$_p9k__jj_dir
 
-  # Map to VCS_STATUS_* for compatibility with the rendering pipeline.
-  # This allows the standard _p9k_vcs_render() and user-defined my_git_formatter()
-  # to produce reasonable output for jj repos.
-  #
-  # Mapping strategy:
-  #   LOCAL_BRANCH = first bookmark (or change_id if no bookmarks)
-  #   COMMIT       = change_id (the primary jj identifier)
-  #   TAG          = additional bookmarks (if more than one)
-  #   HAS_UNSTAGED = 1 when working copy is not empty (has changes)
-  #   HAS_CONFLICTED = 1 when there are conflicts
-  #   COMMIT_SUMMARY = description (triggers "wip" detection in formatter)
+  # Build bookmarks with distances (starship style: main, feat~2, develop~5)
+  # Line 1 bookmarks = distance 0 (directly on @)
+  # Line 2 bookmarks = distance 1 (@-)
+  # Line N bookmarks = distance N-1
+  local -a bookmark_entries=()
+  local -i dist=0
+  local line bm
+  for line in "${lines[@]}"; do
+    # For line 1, bookmarks are in parts[10] (after the null-separated metadata)
+    local bm_str
+    if (( dist == 0 )); then
+      bm_str=${parts[10]}
+    else
+      bm_str=$line
+    fi
+    if [[ -n $bm_str ]]; then
+      local -a bms=(${(s:,:)bm_str})
+      for bm in "${bms[@]}"; do
+        [[ -z $bm ]] && continue
+        if (( dist == 0 )); then
+          bookmark_entries+=("$bm")
+        else
+          bookmark_entries+=("${bm}~${dist}")
+        fi
+      done
+    fi
+    (( dist++ ))
+  done
+  typeset -g JJ_STATUS_BOOKMARKS_DISPLAY=${(j:, :)bookmark_entries}
+
+  # Map to VCS_STATUS_* for compatibility with _p9k_vcs_render() and my_git_formatter()
   VCS_STATUS_RESULT=ok-sync
   VCS_STATUS_WORKDIR=$_p9k__jj_dir
-
-  # Use change_id as commit hash (what users want to see in jj)
-  VCS_STATUS_COMMIT=${fields[1]}00000000000000000000000000000000
-
-  # Branch = first bookmark, or empty to trigger detached-HEAD display of change_id
-  if [[ -n ${fields[3]} ]]; then
-    local -a bmarks=(${(s: :)fields[3]})
-    VCS_STATUS_LOCAL_BRANCH=${bmarks[1]}
-    # Additional bookmarks shown as tag
-    if (( $#bmarks > 1 )); then
-      VCS_STATUS_TAG=${(j:, :)bmarks[2,-1]}
-    else
-      VCS_STATUS_TAG=
-    fi
-  else
-    VCS_STATUS_LOCAL_BRANCH=
-    VCS_STATUS_TAG=
-  fi
-
+  VCS_STATUS_COMMIT=${parts[1]}00000000000000000000000000000000
+  VCS_STATUS_LOCAL_BRANCH=${JJ_STATUS_BOOKMARKS_DISPLAY}
+  VCS_STATUS_TAG=
   VCS_STATUS_REMOTE_BRANCH=
   VCS_STATUS_REMOTE_NAME=
   VCS_STATUS_REMOTE_URL=
@@ -4170,16 +4177,16 @@ function _p9k_jj_query() {
   VCS_STATUS_INDEX_SIZE=0
   VCS_STATUS_NUM_STAGED=0
   VCS_STATUS_NUM_UNSTAGED=0
-  VCS_STATUS_NUM_CONFLICTED=$(( fields[4] ))
+  VCS_STATUS_NUM_CONFLICTED=$(( parts[3] ))
   VCS_STATUS_NUM_UNTRACKED=0
   VCS_STATUS_HAS_STAGED=0
-  # In jj, "not empty" means the working copy commit has changes (= modified)
-  VCS_STATUS_HAS_UNSTAGED=$(( ! fields[5] ))
-  VCS_STATUS_HAS_CONFLICTED=$(( fields[4] ))
+  VCS_STATUS_HAS_UNSTAGED=$(( ! parts[4] ))
+  VCS_STATUS_HAS_CONFLICTED=$(( parts[3] ))
   VCS_STATUS_HAS_UNTRACKED=0
   VCS_STATUS_COMMITS_AHEAD=0
   VCS_STATUS_COMMITS_BEHIND=0
   VCS_STATUS_STASHES=0
+  VCS_STATUS_TAG=
   VCS_STATUS_NUM_UNSTAGED_DELETED=0
   VCS_STATUS_NUM_STAGED_NEW=0
   VCS_STATUS_NUM_STAGED_DELETED=0
@@ -4189,33 +4196,73 @@ function _p9k_jj_query() {
   VCS_STATUS_PUSH_COMMITS_BEHIND=0
   VCS_STATUS_NUM_SKIP_WORKTREE=0
   VCS_STATUS_NUM_ASSUME_UNCHANGED=0
-
-  # Build a summary that includes jj-specific status indicators
-  local summary=${fields[9]}
-  local -a indicators=()
-  (( fields[4] )) && indicators+=('conflict')
-  (( fields[6] )) && indicators+=('divergent')
-  (( fields[7] )) && indicators+=('hidden')
-  (( fields[8] )) && indicators+=('immutable')
-  (( fields[5] )) && [[ -z ${fields[9]} ]] && indicators+=('empty')
-  if (( $#indicators )); then
-    summary="${summary:+$summary }(${(j:, :)indicators})"
-  fi
-  VCS_STATUS_COMMIT_SUMMARY=$summary
+  VCS_STATUS_COMMIT_SUMMARY=${parts[8]}
 
   _p9k__jj_active=1
   return 0
 }
 
-# Render a jj VCS segment using the standard _p9k_vcs_render() pipeline.
-# This populates VCS_STATUS_* from jj state, then delegates to the same
-# rendering path used for git. When users have a custom CONTENT_EXPANSION
-# (like my_git_formatter), it will format the jj-populated VCS_STATUS_*
-# variables. When using the built-in formatter, the standard VCS rendering
-# shows change ID, bookmarks, and status naturally.
+# Render a jj VCS segment in starship-compatible format:
+#   {change_id} ({bookmarks_with_distance}) [{status}]
+#
+# Status indicators (matching jj-starship):
+#   !  conflict
+#   ⇔  divergent
+#   ∅  empty description (only when commit has changes)
 function _p9k_vcs_jj_render() {
-  _p9k_vcs_render
-  return $?
+  local state
+
+  if (( JJ_STATUS_CONFLICT )); then
+    state=CONFLICTED
+  elif (( ! JJ_STATUS_EMPTY )); then
+    state=MODIFIED
+  else
+    state=CLEAN
+  fi
+
+  if ! _p9k_cache_ephemeral_get "$state" "$JJ_STATUS_CHANGE_ID" \
+       "$JJ_STATUS_BOOKMARKS_DISPLAY" "$JJ_STATUS_CONFLICT" "$JJ_STATUS_EMPTY" \
+       "$JJ_STATUS_DIVERGENT" "$JJ_STATUS_DESCRIPTION"; then
+
+    local content
+    local icon
+
+    _p9k_get_icon prompt_vcs_$state VCS_JJ_ICON
+    icon=$_p9k__ret
+
+    function _$0_fmt() {
+      _p9k_vcs_style $state $1
+      content+="$_p9k__ret$2"
+    }
+
+    # Change ID (always shown — the primary jj identifier)
+    _$0_fmt COMMIT "${JJ_STATUS_CHANGE_ID//\%/%%}"
+
+    # Bookmarks with distances in parentheses
+    if [[ -n $JJ_STATUS_BOOKMARKS_DISPLAY ]]; then
+      _$0_fmt BRANCH " (${JJ_STATUS_BOOKMARKS_DISPLAY//\%/%%})"
+    fi
+
+    # Status indicators: ! conflict, ⇔ divergent, ∅ empty desc
+    local status_str=
+    (( JJ_STATUS_CONFLICT )) && status_str+='!'
+    (( JJ_STATUS_DIVERGENT )) && status_str+=$'\u21d4'
+    # Only show ∅ for non-empty commits with empty description
+    if [[ -z $JJ_STATUS_DESCRIPTION ]] && (( ! JJ_STATUS_EMPTY )); then
+      status_str+=$'\u2205'
+    fi
+
+    if [[ -n $status_str ]]; then
+      _$0_fmt DIRTY " [${status_str}]"
+    fi
+
+    unfunction _$0_fmt
+
+    _p9k_cache_ephemeral_set "prompt_vcs_$state" "${__p9k_vcs_states[$state]}" "$_p9k_color1" "$icon" 0 '' "$content"
+  fi
+
+  _p9k_prompt_segment "$_p9k__cache_val[@]"
+  return 0
 }
 
 function _p9k_maybe_ignore_git_repo() {
