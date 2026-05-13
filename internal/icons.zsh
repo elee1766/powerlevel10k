@@ -121,6 +121,7 @@ function _p9k_init_icons() {
         VCS_GIT_SOURCEHUT_ICON         '\uE20E '              #
         VCS_HG_ICON                    '\uE1C3 '              # 
         VCS_SVN_ICON                   'svn'$q
+        VCS_JJ_ICON                    'jj'$q
         RUST_ICON                      'R'
         PYTHON_ICON                    '\uE63C'$s             #  (doesn't always work)
         CHEZMOI_ICON                   '\uE12C'$s             # 
@@ -276,6 +277,7 @@ function _p9k_init_icons() {
         VCS_GIT_SOURCEHUT_ICON         '\uF1D3 '              # 
         VCS_HG_ICON                    '\uF0C3 '              # 
         VCS_SVN_ICON                   'svn'$q
+        VCS_JJ_ICON                    'jj'$q
         RUST_ICON                      '\uE6A8'               # 
         PYTHON_ICON                    '\uE63C'$s             # 
         CHEZMOI_ICON                   '\uF015'$s             # 
@@ -436,6 +438,7 @@ function _p9k_init_icons() {
         VCS_GIT_SOURCEHUT_ICON         "${CODEPOINT_OF_AWESOME_GIT:+\\u$CODEPOINT_OF_AWESOME_GIT }"
         VCS_HG_ICON                    "${CODEPOINT_OF_AWESOME_FLASK:+\\u$CODEPOINT_OF_AWESOME_FLASK }"
         VCS_SVN_ICON                   'svn'$q
+        VCS_JJ_ICON                    'jj'$q
         RUST_ICON                      '\uE6A8'                                       # 
         PYTHON_ICON                    '\U1F40D'                                      # 🐍
         CHEZMOI_ICON                    "${CODEPOINT_OF_AWESOME_HOME:+\\u$CODEPOINT_OF_AWESOME_HOME$s}"
@@ -595,6 +598,7 @@ function _p9k_init_icons() {
         VCS_GIT_SOURCEHUT_ICON         '\uF1DB '              # 
         VCS_HG_ICON                    '\uF0C3 '              # 
         VCS_SVN_ICON                   '\uE72D'$q             # 
+        VCS_JJ_ICON                    '\UF15C6 '
         RUST_ICON                      '\uE7A8'$q             # 
         PYTHON_ICON                    '\UE73C '              # 
         CHEZMOI_ICON                   '\uF015'$s             # 
@@ -751,6 +755,7 @@ function _p9k_init_icons() {
         VCS_GIT_SOURCEHUT_ICON         '\uF1DB '              # 
         VCS_HG_ICON                    '\uF0C3 '              # 
         VCS_SVN_ICON                   '\uE72D'$q             # 
+        VCS_JJ_ICON                    'jj'$q
         RUST_ICON                      '\uE7A8'$q             # 
         PYTHON_ICON                    '\UE73C '              # 
         CHEZMOI_ICON                   '\uF015'$s             # 
@@ -904,6 +909,7 @@ function _p9k_init_icons() {
         VCS_GIT_SOURCEHUT_ICON         ''
         VCS_HG_ICON                    ''
         VCS_SVN_ICON                   ''
+        VCS_JJ_ICON                    ''
         RUST_ICON                      'rust'
         PYTHON_ICON                    'py'
         CHEZMOI_ICON                   'chezmoi'
@@ -1059,6 +1065,7 @@ function _p9k_init_icons() {
         VCS_GIT_SOURCEHUT_ICON         ''
         VCS_HG_ICON                    ''
         VCS_SVN_ICON                   ''
+        VCS_JJ_ICON                    ''
         RUST_ICON                      'R'
         PYTHON_ICON                    'Py'
         CHEZMOI_ICON                   'Chez'

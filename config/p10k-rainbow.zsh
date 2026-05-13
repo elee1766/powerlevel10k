@@ -500,8 +500,9 @@
 
   # Show status of repositories of these types. You can add svn and/or hg if you are
   # using them. If you do, your prompt may become slow even when your current directory
-  # isn't in an svn or hg repository.
-  typeset -g POWERLEVEL9K_VCS_BACKENDS=(git)
+  # isn't in an svn or hg repository. jj (Jujutsu) is supported natively and will
+  # take priority over git in colocated jj repos.
+  typeset -g POWERLEVEL9K_VCS_BACKENDS=(git jj)
 
   ##########################[ status: exit code of the last command ]###########################
   # Enable OK_PIPE, ERROR_PIPE and ERROR_SIGNAL status states to allow us to enable, disable and

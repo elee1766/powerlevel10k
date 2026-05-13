@@ -3857,6 +3857,10 @@ function _p9k_vcs_status_purge() {
 }
 
 function _p9k_vcs_icon() {
+  if (( _p9k__jj_active )); then
+    _p9k_get_icon prompt_vcs_CLEAN VCS_JJ_ICON
+    return
+  fi
   local pat icon
   for pat icon in "${(@)_POWERLEVEL9K_VCS_GIT_REMOTE_ICONS}"; do
     if [[ $1 == $~pat ]]; then
@@ -4042,6 +4046,177 @@ function _p9k_vcs_render() {
   return 0
 }
 
+################################################################
+# Jujutsu (jj) VCS support
+#
+# Detects jj repositories and populates VCS_STATUS_* variables
+# from jj state, then renders via the standard VCS segment.
+
+# Walk up directory tree to find .jj directory.
+# Sets _p9k__jj_dir to the repo root or empty if not found.
+function _p9k_jj_detect() {
+  _p9k__jj_dir=
+  local dir=$_p9k__cwd_a
+  while true; do
+    if [[ -d $dir/.jj ]]; then
+      _p9k__jj_dir=$dir
+      return 0
+    fi
+    [[ $dir == (/|.) ]] && return 1
+    dir=${dir:h}
+  done
+}
+
+# Query jj for repository state and populate VCS_STATUS_* variables.
+# Uses --ignore-working-copy for speed (avoids snapshot).
+# Returns 0 on success.
+function _p9k_jj_query() {
+  typeset -gi _p9k__jj_active=0
+  [[ -n $_p9k__jj_dir ]] || return 1
+
+  local jj_output
+  # Template fields separated by \x00:
+  #  1: change_id (shortest, 8 chars)
+  #  2: commit_id (shortest, 8 chars)
+  #  3: bookmarks (space-separated)
+  #  4: conflict (1/0)
+  #  5: empty (1/0)
+  #  6: divergent (1/0)
+  #  7: hidden (1/0)
+  #  8: immutable (1/0)
+  #  9: description first line
+  # 10: root (1/0)
+  jj_output=$(
+    command jj log \
+      --no-graph \
+      --ignore-working-copy \
+      --no-pager \
+      -r @ \
+      --limit 1 \
+      -T 'separate("\x00",
+            change_id.shortest(8),
+            commit_id.shortest(8),
+            bookmarks.join(" "),
+            if(conflict, "1", "0"),
+            if(empty, "1", "0"),
+            if(divergent, "1", "0"),
+            if(hidden, "1", "0"),
+            if(immutable, "1", "0"),
+            if(description, description.first_line(), ""),
+            if(root, "1", "0"))' \
+      2>/dev/null
+  ) || return 1
+
+  [[ -n $jj_output ]] || return 1
+
+  local -a fields
+  fields=("${(@s:\x00:)jj_output}")
+
+  # Need at least 10 fields
+  (( $#fields >= 10 )) || return 1
+
+  # Don't show anything for the root commit
+  [[ ${fields[10]} == 1 ]] && return 1
+
+  # Populate JJ-specific state variables
+  typeset -g JJ_STATUS_CHANGE_ID=${fields[1]}
+  typeset -g JJ_STATUS_COMMIT_ID=${fields[2]}
+  typeset -g JJ_STATUS_BOOKMARKS=${fields[3]}
+  typeset -gi JJ_STATUS_CONFLICT=${fields[4]}
+  typeset -gi JJ_STATUS_EMPTY=${fields[5]}
+  typeset -gi JJ_STATUS_DIVERGENT=${fields[6]}
+  typeset -gi JJ_STATUS_HIDDEN=${fields[7]}
+  typeset -gi JJ_STATUS_IMMUTABLE=${fields[8]}
+  typeset -g JJ_STATUS_DESCRIPTION=${fields[9]}
+  typeset -g JJ_STATUS_WORKDIR=$_p9k__jj_dir
+
+  # Map to VCS_STATUS_* for compatibility with the rendering pipeline.
+  # This allows the standard _p9k_vcs_render() and user-defined my_git_formatter()
+  # to produce reasonable output for jj repos.
+  #
+  # Mapping strategy:
+  #   LOCAL_BRANCH = first bookmark (or change_id if no bookmarks)
+  #   COMMIT       = change_id (the primary jj identifier)
+  #   TAG          = additional bookmarks (if more than one)
+  #   HAS_UNSTAGED = 1 when working copy is not empty (has changes)
+  #   HAS_CONFLICTED = 1 when there are conflicts
+  #   COMMIT_SUMMARY = description (triggers "wip" detection in formatter)
+  VCS_STATUS_RESULT=ok-sync
+  VCS_STATUS_WORKDIR=$_p9k__jj_dir
+
+  # Use change_id as commit hash (what users want to see in jj)
+  VCS_STATUS_COMMIT=${fields[1]}00000000000000000000000000000000
+
+  # Branch = first bookmark, or empty to trigger detached-HEAD display of change_id
+  if [[ -n ${fields[3]} ]]; then
+    local -a bmarks=(${(s: :)fields[3]})
+    VCS_STATUS_LOCAL_BRANCH=${bmarks[1]}
+    # Additional bookmarks shown as tag
+    if (( $#bmarks > 1 )); then
+      VCS_STATUS_TAG=${(j:, :)bmarks[2,-1]}
+    else
+      VCS_STATUS_TAG=
+    fi
+  else
+    VCS_STATUS_LOCAL_BRANCH=
+    VCS_STATUS_TAG=
+  fi
+
+  VCS_STATUS_REMOTE_BRANCH=
+  VCS_STATUS_REMOTE_NAME=
+  VCS_STATUS_REMOTE_URL=
+  VCS_STATUS_ACTION=
+  VCS_STATUS_INDEX_SIZE=0
+  VCS_STATUS_NUM_STAGED=0
+  VCS_STATUS_NUM_UNSTAGED=0
+  VCS_STATUS_NUM_CONFLICTED=$(( fields[4] ))
+  VCS_STATUS_NUM_UNTRACKED=0
+  VCS_STATUS_HAS_STAGED=0
+  # In jj, "not empty" means the working copy commit has changes (= modified)
+  VCS_STATUS_HAS_UNSTAGED=$(( ! fields[5] ))
+  VCS_STATUS_HAS_CONFLICTED=$(( fields[4] ))
+  VCS_STATUS_HAS_UNTRACKED=0
+  VCS_STATUS_COMMITS_AHEAD=0
+  VCS_STATUS_COMMITS_BEHIND=0
+  VCS_STATUS_STASHES=0
+  VCS_STATUS_NUM_UNSTAGED_DELETED=0
+  VCS_STATUS_NUM_STAGED_NEW=0
+  VCS_STATUS_NUM_STAGED_DELETED=0
+  VCS_STATUS_PUSH_REMOTE_NAME=
+  VCS_STATUS_PUSH_REMOTE_URL=
+  VCS_STATUS_PUSH_COMMITS_AHEAD=0
+  VCS_STATUS_PUSH_COMMITS_BEHIND=0
+  VCS_STATUS_NUM_SKIP_WORKTREE=0
+  VCS_STATUS_NUM_ASSUME_UNCHANGED=0
+
+  # Build a summary that includes jj-specific status indicators
+  local summary=${fields[9]}
+  local -a indicators=()
+  (( fields[4] )) && indicators+=('conflict')
+  (( fields[6] )) && indicators+=('divergent')
+  (( fields[7] )) && indicators+=('hidden')
+  (( fields[8] )) && indicators+=('immutable')
+  (( fields[5] )) && [[ -z ${fields[9]} ]] && indicators+=('empty')
+  if (( $#indicators )); then
+    summary="${summary:+$summary }(${(j:, :)indicators})"
+  fi
+  VCS_STATUS_COMMIT_SUMMARY=$summary
+
+  _p9k__jj_active=1
+  return 0
+}
+
+# Render a jj VCS segment using the standard _p9k_vcs_render() pipeline.
+# This populates VCS_STATUS_* from jj state, then delegates to the same
+# rendering path used for git. When users have a custom CONTENT_EXPANSION
+# (like my_git_formatter), it will format the jj-populated VCS_STATUS_*
+# variables. When using the built-in formatter, the standard VCS rendering
+# shows change ID, bookmarks, and status naturally.
+function _p9k_vcs_jj_render() {
+  _p9k_vcs_render
+  return $?
+}
+
 function _p9k_maybe_ignore_git_repo() {
   if [[ $VCS_STATUS_RESULT == ok-* && $VCS_STATUS_WORKDIR == $~_POWERLEVEL9K_VCS_DISABLED_WORKDIR_PATTERN ]]; then
     VCS_STATUS_RESULT=norepo${VCS_STATUS_RESULT#ok}
@@ -4160,12 +4335,26 @@ function _p9k_vcs_gitstatus() {
 # Segment to show VCS information
 
 prompt_vcs() {
+  typeset -gi _p9k__jj_active=0
+
   if (( _p9k_vcs_index && $+GITSTATUS_DAEMON_PID_POWERLEVEL9K )); then
     _p9k__prompt+='${(e)_p9k__vcs}'
     return
   fi
 
   local -a backends=($_POWERLEVEL9K_VCS_BACKENDS)
+
+  # Try jj first when it's in backends and we're in a jj repo.
+  # jj takes priority over git in colocated repos since the user
+  # is working with jj, not raw git.
+  if (( ${backends[(I)jj]} )) && _p9k_jj_detect; then
+    if _p9k_jj_query; then
+      _p9k_vcs_jj_render && return
+    fi
+  fi
+  # Remove jj from backends since vcs_info doesn't know about it
+  backends=(${backends:#jj})
+
   if (( ${backends[(I)git]} && $+GITSTATUS_DAEMON_PID_POWERLEVEL9K )) && _p9k_vcs_gitstatus; then
     _p9k_vcs_render && return
     backends=(${backends:#git})
@@ -7572,6 +7761,7 @@ _p9k_init_params() {
     .citc
     .git
     .hg
+    .jj
     .node-version
     .python-version
     .ruby-version
@@ -7739,8 +7929,9 @@ _p9k_init_params() {
   # vcs segment and fix it asynchronously when the results come it.
   _p9k_declare -F POWERLEVEL9K_VCS_MAX_SYNC_LATENCY_SECONDS 0.01
   (( POWERLEVEL9K_VCS_MAX_SYNC_LATENCY_SECONDS >= 0 )) || (( POWERLEVEL9K_VCS_MAX_SYNC_LATENCY_SECONDS = 0 ))
-  _p9k_declare -a POWERLEVEL9K_VCS_BACKENDS -- git
+  _p9k_declare -a POWERLEVEL9K_VCS_BACKENDS -- git jj
   (( $+commands[git] )) || _POWERLEVEL9K_VCS_BACKENDS=(${_POWERLEVEL9K_VCS_BACKENDS:#git})
+  (( $+commands[jj] ))  || _POWERLEVEL9K_VCS_BACKENDS=(${_POWERLEVEL9K_VCS_BACKENDS:#jj})
   _p9k_declare -b POWERLEVEL9K_VCS_DISABLE_GITSTATUS_FORMATTING 0
   _p9k_declare -i POWERLEVEL9K_VCS_MAX_INDEX_SIZE_DIRTY -1
   _p9k_declare -i POWERLEVEL9K_VCS_STAGED_MAX_NUM 1
